@@ -37,7 +37,6 @@ This repo is now packaged as a Docker-first OpenClaw workspace, with the actual 
 |     \- scripts/
 |        |- run-mybench-local.py
 |        \- run-mybench.mjs
-|- anthropic-ai-sdk-0.39.0.tgz
 ```
 
 ## Quick start
