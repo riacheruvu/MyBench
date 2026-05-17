@@ -4,8 +4,6 @@ AlignHarness is a personal AI benchmark: it tests whether an assistant or agent 
 
 Instead of asking only "is this model capable?", AlignHarness asks: "does this setup honor *my* preferences when the prompt is subtle, messy, or socially awkward?"
 
-For related work and positioning, see [PRIOR_ART.md](./PRIOR_ART.md).
-
 Current focus areas in `preferences.yaml`:
 
 - factuality - catches false premises and uncertainty
@@ -16,6 +14,12 @@ Current focus areas in `preferences.yaml`:
 ## Why this exists
 
 System prompts, memory files, and personality settings are easy to write but hard to verify. AlignHarness turns those preferences into generated test cases, compares a default assistant against your custom setup, scores the outputs with a behavioral rubric, and reports where the setup failed.
+
+## Related ideas
+
+AlignHarness is a small prototype, not a claim of firstness. It sits near work on personalized LLM evaluation, behavioral preference rubrics, model-as-judge workflows, sycophancy tests, instruction-following evals, and agent configuration testing.
+
+The narrow goal is practical: make it easy to turn your own interaction preferences into repeatable smoke tests for prompts, memory files, model choices, and agent configs.
 
 ## Architecture
 
