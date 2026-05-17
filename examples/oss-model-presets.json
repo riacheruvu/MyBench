@@ -1,0 +1,40 @@
+{
+  "ollama_local_small": {
+    "provider": "llamacpp",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "models": [
+      "qwen3:8b",
+      "llama3.1:8b",
+      "gemma3:12b"
+    ],
+    "notes": "Good first local sweep when running Ollama on a laptop/desktop. Replace model tags with `ollama list` output."
+  },
+  "ollama_local_stronger": {
+    "provider": "llamacpp",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "models": [
+      "qwen3:32b",
+      "deepseek-r1:32b",
+      "gemma3:27b"
+    ],
+    "notes": "Use only if your machine has enough RAM/VRAM. These tags are examples; confirm availability with your Ollama install."
+  },
+  "llamacpp_gguf": {
+    "provider": "llamacpp",
+    "baseUrl": "http://127.0.0.1:8080",
+    "models": [
+      "local-model"
+    ],
+    "notes": "llama-server usually serves one GGUF at a time unless you put a router/load balancer in front. The model name may be ignored by the server."
+  },
+  "hosted_openai_compatible_oss": {
+    "provider": "llamacpp",
+    "baseUrl": "https://your-openai-compatible-endpoint.example/v1",
+    "models": [
+      "meta-llama/Llama-4-Scout",
+      "Qwen/Qwen3-32B",
+      "deepseek-ai/DeepSeek-R1"
+    ],
+    "notes": "For Together, Fireworks, Groq, vLLM, SGLang, TGI, LM Studio, or another OpenAI-compatible router. Set ALIGNHARNESS_LLAMACPP_API_KEY if needed."
+  }
+}

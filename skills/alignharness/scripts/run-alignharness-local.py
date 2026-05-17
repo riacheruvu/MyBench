@@ -1,3 +1,15 @@
+"""
+ALIGNHARNESS local runner - llama.cpp backend (llama-cpp-python).
+
+Requires:
+    pip install llama-cpp-python
+
+Set ALIGNHARNESS_GGUF_PATH to the GGUF model file you want to use, e.g.:
+    export ALIGNHARNESS_GGUF_PATH=~/models/phi-3-mini-4k-instruct-q4.gguf
+
+If ALIGNHARNESS_GGUF_PATH is not set, the runner will exit with a clear error.
+"""
+
 import argparse
 import json
 import os
@@ -6,23 +18,58 @@ import re
 import sys
 import time
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-
-DEFAULT_LOCAL_MODEL = os.environ.get("MYBENCH_LOCAL_MODEL", "HuggingFaceTB/SmolLM2-135M-Instruct")
-DEFAULT_TEST_CASES = min(20, max(1, int(os.environ.get("MYBENCH_NUM_CASES", "10"))))
+DEFAULT_TEST_CASES = min(20, max(1, int(os.environ.get("ALIGNHARNESS_NUM_CASES", "10"))))
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
-DEFAULT_LOCAL_FAST = os.environ.get("MYBENCH_LOCAL_FAST", "1").strip().lower() not in {"0", "false", "no"}
+DEFAULT_LOCAL_FAST = os.environ.get("ALIGNHARNESS_LOCAL_FAST", "1").strip().lower() not in {"0", "false", "no"}
+GGUF_PATH = os.environ.get("ALIGNHARNESS_GGUF_PATH", "").strip()
+
+CTX_SIZE = int(os.environ.get("ALIGNHARNESS_CTX_SIZE", "2048"))
+N_THREADS = int(os.environ.get("ALIGNHARNESS_N_THREADS", "4"))
+N_GPU_LAYERS = int(os.environ.get("ALIGNHARNESS_N_GPU_LAYERS", "0"))  # 0 = CPU only
+
+
+def load_llama(model_path):
+    try:
+        from llama_cpp import Llama
+    except ImportError:
+        print(
+            "llama-cpp-python is not installed.\n"
+            "Run: pip install llama-cpp-python",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return Llama(
+        model_path=model_path,
+        n_ctx=CTX_SIZE,
+        n_threads=N_THREADS,
+        n_gpu_layers=N_GPU_LAYERS,
+        verbose=False,
+    )
+
+
+def chat(llm, system, user_prompt, max_tokens):
+    response = llm.create_chat_completion(
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=max_tokens,
+        temperature=0.0,
+    )
+    text = response["choices"][0]["message"]["content"].strip()
+    if not text:
+        raise ValueError("Model response did not include text content.")
+    return text
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run MyBench against a local Hugging Face model.")
+    parser = argparse.ArgumentParser(description="Run ALIGNHARNESS against a local GGUF model via llama-cpp-python.")
     parser.add_argument("--intent", required=True, help="Benchmark target behavior")
     parser.add_argument("--prompt", default=None, help="Custom system prompt for config B")
     parser.add_argument("--prompt-file", default=None, help="Read the custom system prompt from a file")
     parser.add_argument("--cases", type=int, default=DEFAULT_TEST_CASES, help="Number of cases (1-20)")
-    parser.add_argument("--model", default=DEFAULT_LOCAL_MODEL, help="Local Hugging Face model id")
+    parser.add_argument("--model", default=GGUF_PATH, help="Path to GGUF model file (overrides ALIGNHARNESS_GGUF_PATH)")
     parser.add_argument("--json", action="store_true", help="Print JSON report")
     return parser.parse_args()
 
@@ -34,47 +81,6 @@ def load_prompt(args):
         with open(args.prompt_file, "r", encoding="utf-8") as handle:
             return handle.read().strip()
     return args.prompt
-
-
-def load_model(model_name):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype="auto")
-    model.to("cpu")
-    model.eval()
-    return tokenizer, model
-
-
-def extract_text(generated, prompt_text):
-    if generated.startswith(prompt_text):
-        return generated[len(prompt_text) :].strip()
-    return generated.strip()
-
-
-def chat(tokenizer, model, system, user_prompt, max_new_tokens):
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_prompt},
-    ]
-    prompt_text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    inputs = tokenizer(prompt_text, return_tensors="pt")
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            temperature=None,
-            top_p=None,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-    generated = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    text = extract_text(generated, prompt_text)
-    if not text:
-        raise ValueError("Model response did not include text content.")
-    return text
 
 
 def parse_json_payload(raw_text, expected_label):
@@ -91,10 +97,9 @@ def parse_json_payload(raw_text, expected_label):
     raise ValueError(f"Failed to parse {expected_label} JSON.")
 
 
-def generate_test_cases(tokenizer, model, user_intent, test_cases):
+def generate_test_cases(llm, user_intent, test_cases):
     raw = chat(
-        tokenizer,
-        model,
+        llm,
         (
             "You are an AI evaluation expert.\n"
             "Generate realistic and discriminating prompts for a personal benchmark.\n\n"
@@ -112,17 +117,16 @@ def generate_test_cases(tokenizer, model, user_intent, test_cases):
     return [str(item).strip() for item in parsed[:test_cases] if str(item).strip()]
 
 
-def run_prompt(tokenizer, model, prompt, system_prompt):
-    return chat(tokenizer, model, system_prompt or DEFAULT_SYSTEM_PROMPT, prompt, 64 if DEFAULT_LOCAL_FAST else 220)
+def run_prompt(llm, prompt, system_prompt):
+    return chat(llm, system_prompt or DEFAULT_SYSTEM_PROMPT, prompt, 64 if DEFAULT_LOCAL_FAST else 220)
 
 
-def score_outputs(tokenizer, model, prompt, output_a, output_b, user_intent):
+def score_outputs(llm, prompt, output_a, output_b, user_intent):
     swap = random.random() >= 0.5
     left = output_b if swap else output_a
     right = output_a if swap else output_b
     raw = chat(
-        tokenizer,
-        model,
+        llm,
         (
             "You are a strict, impartial evaluator.\n"
             "Judge only against the stated user preference.\n"
@@ -147,16 +151,15 @@ def score_outputs(tokenizer, model, prompt, output_a, output_b, user_intent):
     return {"winner": internal_winner, "reason": reason}
 
 
-def analyze_losses(tokenizer, model, losses, user_intent, config_b_prompt):
+def analyze_losses(llm, losses, user_intent, config_b_prompt):
     if not losses:
         return None
     loss_lines = "\n\n".join(
-        f"{index + 1}. Prompt: {loss['prompt']}\nReason: {loss['reason']}"
-        for index, loss in enumerate(losses)
+        f"{i + 1}. Prompt: {loss['prompt']}\nReason: {loss['reason']}"
+        for i, loss in enumerate(losses)
     )
     return chat(
-        tokenizer,
-        model,
+        llm,
         (
             "You are an AI prompt engineering expert.\n"
             "Analyze why a system prompt underperformed.\n"
@@ -172,10 +175,9 @@ def analyze_losses(tokenizer, model, losses, user_intent, config_b_prompt):
     )
 
 
-def generate_improved_prompt(tokenizer, model, user_intent, config_b_prompt, weakness_analysis):
+def generate_improved_prompt(llm, user_intent, config_b_prompt, weakness_analysis):
     return chat(
-        tokenizer,
-        model,
+        llm,
         (
             "You are an expert prompt engineer.\n"
             "Rewrite the system prompt so it better matches the user preference.\n"
@@ -190,49 +192,42 @@ def generate_improved_prompt(tokenizer, model, user_intent, config_b_prompt, wea
     )
 
 
-def run_mybench(user_intent, config_b_prompt, model_name, test_cases):
-    tokenizer, model = load_model(model_name)
+def run_ALIGNHARNESS(user_intent, config_b_prompt, model_path, test_cases):
+    if not model_path:
+        print(
+            "No GGUF model path provided.\n"
+            "Set ALIGNHARNESS_GGUF_PATH or pass --model <path/to/model.gguf>",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    llm = load_llama(model_path)
     config_b = config_b_prompt or f"You are a helpful AI assistant. Prioritize this user preference: {user_intent}."
     start_time = time.time()
-    prompts = generate_test_cases(tokenizer, model, user_intent, test_cases)
+    prompts = generate_test_cases(llm, user_intent, test_cases)
     wins = {"A": 0, "B": 0, "tie": 0}
     results = []
     losses = []
 
     for prompt in prompts:
-        output_a = run_prompt(tokenizer, model, prompt, DEFAULT_SYSTEM_PROMPT)
-        output_b = run_prompt(tokenizer, model, prompt, config_b)
-        score = score_outputs(tokenizer, model, prompt, output_a, output_b, user_intent)
+        output_a = run_prompt(llm, prompt, DEFAULT_SYSTEM_PROMPT)
+        output_b = run_prompt(llm, prompt, config_b)
+        score = score_outputs(llm, prompt, output_a, output_b, user_intent)
         if score["winner"] not in wins:
             score["winner"] = "tie"
         wins[score["winner"]] += 1
-        results.append(
-            {
-                "prompt": prompt,
-                "outputA": output_a,
-                "outputB": output_b,
-                "score": score,
-            }
-        )
+        results.append({"prompt": prompt, "outputA": output_a, "outputB": output_b, "score": score})
         if score["winner"] == "A":
-            losses.append(
-                {
-                    "prompt": prompt,
-                    "reason": score["reason"],
-                    "outputA": output_a,
-                    "outputB": output_b,
-                }
-            )
+            losses.append({"prompt": prompt, "reason": score["reason"], "outputA": output_a, "outputB": output_b})
 
-    weakness_analysis = None
+    weakness_analysis = analyze_losses(llm, losses, user_intent, config_b)
     improved_prompt = None
-    if not DEFAULT_LOCAL_FAST:
-        weakness_analysis = analyze_losses(tokenizer, model, losses, user_intent, config_b)
-        if weakness_analysis:
-            improved_prompt = generate_improved_prompt(tokenizer, model, user_intent, config_b, weakness_analysis)
+    if weakness_analysis:
+        improved_prompt = generate_improved_prompt(llm, user_intent, config_b, weakness_analysis)
 
     duration_seconds = f"{time.time() - start_time:.1f}s"
-    win_rate = f"{round((wins['B'] / len(prompts)) * 100) if prompts else 0}%"
+    ab_total = wins["A"] + wins["B"]
+    win_rate = f"{round((wins['B'] / ab_total) * 100) if ab_total else 0}%"  # excludes ties
     if wins["B"] > wins["A"]:
         verdict = "Config B performed better."
     elif wins["A"] > wins["B"]:
@@ -242,8 +237,8 @@ def run_mybench(user_intent, config_b_prompt, model_name, test_cases):
 
     return {
         "intent": user_intent,
-        "provider": "local",
-        "model": model_name,
+        "provider": "local-llamacpp",
+        "model": model_path,
         "testCaseCount": len(prompts),
         "scores": wins,
         "winRate": win_rate,
@@ -260,10 +255,7 @@ def main():
     args = parse_args()
     test_cases = min(20, max(1, args.cases))
     prompt = load_prompt(args)
-    report = run_mybench(args.intent, prompt, args.model, test_cases)
-    if args.json:
-        print(json.dumps(report, indent=2))
-        return
+    report = run_ALIGNHARNESS(args.intent, prompt, args.model, test_cases)
     print(json.dumps(report, indent=2))
 
 
@@ -271,5 +263,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print(f"MyBench local error: {error}", file=sys.stderr)
+        print(f"ALIGNHARNESS local error: {error}", file=sys.stderr)
         sys.exit(1)

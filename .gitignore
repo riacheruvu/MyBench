@@ -2,6 +2,11 @@
 .openclaw-local/
 .openclaw/
 state/
+logs/
+tools/
+downloads/
+reports/
+tmp-codex-skills/
 __pycache__/
 *.pyc
 npm-debug.log*

@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/gateway.Dockerfile
-    image: mybench-openclaw-gateway:local
+    image: alignharness-openclaw-gateway:local
     user: "0:0"
     init: true
     restart: unless-stopped
@@ -19,14 +19,19 @@ services:
       OPENCLAW_GATEWAY_BIND: ${OPENCLAW_GATEWAY_BIND:-lan}
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-change-me}
       OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
-      OPENCLAW_SANDBOX_IMAGE: ${OPENCLAW_SANDBOX_IMAGE:-mybench-openclaw-sandbox:local}
+      OPENCLAW_SANDBOX_IMAGE: ${OPENCLAW_SANDBOX_IMAGE:-alignharness-openclaw-sandbox:local}
       OPENCLAW_SANDBOX_MODE: ${OPENCLAW_SANDBOX_MODE:-all}
       OPENCLAW_SANDBOX_SCOPE: ${OPENCLAW_SANDBOX_SCOPE:-session}
       OPENCLAW_SANDBOX_WORKSPACE_ACCESS: ${OPENCLAW_SANDBOX_WORKSPACE_ACCESS:-none}
       OPENCLAW_SANDBOX_NETWORK: ${OPENCLAW_SANDBOX_NETWORK:-bridge}
-      MYBENCH_PROVIDER: ${MYBENCH_PROVIDER:-}
-      MYBENCH_LOCAL_MODEL: ${MYBENCH_LOCAL_MODEL:-}
-      MYBENCH_LOCAL_FAST: ${MYBENCH_LOCAL_FAST:-}
+      ALIGNHARNESS_PROVIDER: ${ALIGNHARNESS_PROVIDER:-llamacpp}
+      ALIGNHARNESS_MODEL: ${ALIGNHARNESS_MODEL:-}
+      ALIGNHARNESS_JUDGE_PROVIDER: ${ALIGNHARNESS_JUDGE_PROVIDER:-}
+      ALIGNHARNESS_JUDGE_MODEL: ${ALIGNHARNESS_JUDGE_MODEL:-}
+      ALIGNHARNESS_LLAMACPP_URL: ${ALIGNHARNESS_LLAMACPP_URL:-http://host.docker.internal:8080}
+      ALIGNHARNESS_LLAMACPP_API_KEY: ${ALIGNHARNESS_LLAMACPP_API_KEY:-}
+      ALIGNHARNESS_REPEAT: ${ALIGNHARNESS_REPEAT:-1}
+      ALIGNHARNESS_LOCAL_FAST: ${ALIGNHARNESS_LOCAL_FAST:-1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
@@ -47,7 +52,7 @@ services:
       start_period: 20s
 
   openclaw-cli:
-    image: mybench-openclaw-gateway:local
+    image: alignharness-openclaw-gateway:local
     user: "0:0"
     network_mode: "service:openclaw-gateway"
     stdin_open: true
@@ -62,9 +67,14 @@ services:
       BROWSER: echo
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-change-me}
       OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
-      MYBENCH_PROVIDER: ${MYBENCH_PROVIDER:-}
-      MYBENCH_LOCAL_MODEL: ${MYBENCH_LOCAL_MODEL:-}
-      MYBENCH_LOCAL_FAST: ${MYBENCH_LOCAL_FAST:-}
+      ALIGNHARNESS_PROVIDER: ${ALIGNHARNESS_PROVIDER:-llamacpp}
+      ALIGNHARNESS_MODEL: ${ALIGNHARNESS_MODEL:-}
+      ALIGNHARNESS_JUDGE_PROVIDER: ${ALIGNHARNESS_JUDGE_PROVIDER:-}
+      ALIGNHARNESS_JUDGE_MODEL: ${ALIGNHARNESS_JUDGE_MODEL:-}
+      ALIGNHARNESS_LLAMACPP_URL: ${ALIGNHARNESS_LLAMACPP_URL:-http://host.docker.internal:8080}
+      ALIGNHARNESS_LLAMACPP_API_KEY: ${ALIGNHARNESS_LLAMACPP_API_KEY:-}
+      ALIGNHARNESS_REPEAT: ${ALIGNHARNESS_REPEAT:-1}
+      ALIGNHARNESS_LOCAL_FAST: ${ALIGNHARNESS_LOCAL_FAST:-1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
@@ -73,9 +83,33 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     entrypoint: ["node", "dist/index.js"]
 
+  # -- llama.cpp server (optional) --------------------------------------------
+  # Profile: llama
+  # Usage:   docker compose --profile llama up -d
+  #
+  # Runs llama-server inside Docker as an alternative to running it on the host.
+  # The gateway and sandbox containers reach it via http://llama-server:8080
+  # (set ALIGNHARNESS_LLAMACPP_URL=http://llama-server:8080 in .env when using this).
+  #
+  # Mount your models directory and set ALIGNHARNESS_MODEL_FILE to the filename.
+  llama-server:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["llama"]
+    ports:
+      - "${LLAMACPP_PORT:-8080}:8080"
+    volumes:
+      - ${ALIGNHARNESS_MODELS_DIR:-./models}:/models:ro
+    command: >
+      -m /models/${ALIGNHARNESS_MODEL_FILE:-model.gguf}
+      --host 0.0.0.0
+      --port 8080
+      --ctx-size ${ALIGNHARNESS_CTX_SIZE:-2048}
+      --threads ${ALIGNHARNESS_N_THREADS:-4}
+      --n-gpu-layers ${ALIGNHARNESS_N_GPU_LAYERS:-0}
+
   openclaw-sandbox-image:
     build:
       context: .
       dockerfile: docker/sandbox.Dockerfile
-    image: mybench-openclaw-sandbox:local
+    image: alignharness-openclaw-sandbox:local
     profiles: ["build-only"]

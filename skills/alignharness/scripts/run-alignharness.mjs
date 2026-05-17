@@ -7,13 +7,16 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
 const DEFAULT_LOCAL_MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct";
-const DEFAULT_TEST_CASES = clampInteger(process.env.MYBENCH_NUM_CASES, 10, 1, 20);
+const DEFAULT_TEST_CASES = clampInteger(process.env.ALIGNHARNESS_NUM_CASES, 10, 1, 20);
 const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
+const LLAMACPP_API_URL = (process.env.ALIGNHARNESS_LLAMACPP_URL?.trim() || "http://localhost:8080").replace(/\/$/, "");
+const LLAMACPP_API_KEY = process.env.ALIGNHARNESS_LLAMACPP_API_KEY?.trim();
+const USER_PROMPT_PREFIX = process.env.ALIGNHARNESS_NO_THINK === "1" ? "/no_think " : "";
 const LOCAL_SCRIPT_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
-  "run-mybench-local.py",
+  "run-alignharness-local.py",
 );
 
 function clampInteger(value, fallback, min, max) {
@@ -24,12 +27,17 @@ function clampInteger(value, fallback, min, max) {
   return Math.min(max, Math.max(min, parsed));
 }
 
+function chatCompletionsUrl(baseUrl) {
+  const base = baseUrl.replace(/\/$/, "");
+  return base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
+}
+
 function parseArgs(argv) {
   const args = {
     intent: "",
     prompt: null,
     promptFile: null,
-    model: process.env.MYBENCH_MODEL || null,
+    model: process.env.ALIGNHARNESS_MODEL || null,
     testCases: DEFAULT_TEST_CASES,
     json: false,
   };
@@ -57,7 +65,7 @@ function parseArgs(argv) {
     }
 
     if (arg === "--model") {
-      args.model = argv[index + 1] || process.env.MYBENCH_MODEL || null;
+      args.model = argv[index + 1] || process.env.ALIGNHARNESS_MODEL || null;
       index += 1;
       continue;
     }
@@ -102,11 +110,11 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`MyBench
+  console.log(`ALIGNHARNESS
 
 Usage:
-  node scripts/run-mybench.mjs --intent "warm email replies"
-  node scripts/run-mybench.mjs --intent "patient coding help" --prompt-file prompt.txt
+  node scripts/run-alignharness.mjs --intent "warm email replies"
+  node scripts/run-alignharness.mjs --intent "patient coding help" --prompt-file prompt.txt
 
 Options:
   --intent <text>       Benchmark target behavior
@@ -119,16 +127,24 @@ Options:
 }
 
 function resolveProvider(modelOverride = null) {
-  const explicitProvider = (process.env.MYBENCH_PROVIDER || "").trim().toLowerCase();
+  const explicitProvider = (process.env.ALIGNHARNESS_PROVIDER || "").trim().toLowerCase();
   const openAiKey = process.env.OPENAI_API_KEY?.trim();
   const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
-  const localModel = process.env.MYBENCH_LOCAL_MODEL?.trim() || DEFAULT_LOCAL_MODEL;
+  const localModel = process.env.ALIGNHARNESS_LOCAL_MODEL?.trim() || DEFAULT_LOCAL_MODEL;
 
   if (explicitProvider === "local") {
     return {
       name: "local",
       apiKey: null,
-      model: modelOverride || process.env.MYBENCH_MODEL || localModel,
+      model: modelOverride || process.env.ALIGNHARNESS_MODEL || localModel,
+    };
+  }
+
+  if (explicitProvider === "llamacpp") {
+    return {
+      name: "llamacpp",
+      apiKey: null,
+      model: modelOverride || process.env.ALIGNHARNESS_MODEL || "local-model",
     };
   }
 
@@ -136,7 +152,7 @@ function resolveProvider(modelOverride = null) {
     return {
       name: "openai",
       apiKey: openAiKey,
-      model: modelOverride || process.env.MYBENCH_MODEL || DEFAULT_OPENAI_MODEL,
+      model: modelOverride || process.env.ALIGNHARNESS_MODEL || DEFAULT_OPENAI_MODEL,
     };
   }
 
@@ -144,14 +160,14 @@ function resolveProvider(modelOverride = null) {
     return {
       name: "anthropic",
       apiKey: anthropicKey,
-      model: modelOverride || process.env.MYBENCH_MODEL || DEFAULT_ANTHROPIC_MODEL,
+      model: modelOverride || process.env.ALIGNHARNESS_MODEL || DEFAULT_ANTHROPIC_MODEL,
     };
   }
 
   return {
     name: "local",
     apiKey: null,
-    model: modelOverride || process.env.MYBENCH_MODEL || localModel,
+    model: modelOverride || process.env.ALIGNHARNESS_MODEL || localModel,
   };
 }
 
@@ -173,7 +189,7 @@ function buildPythonArgs(userIntent, configBSystemPrompt, options = {}) {
   return args;
 }
 
-async function runLocalMyBench(userIntent, configBSystemPrompt = null, options = {}) {
+async function runLocalALIGNHARNESS(userIntent, configBSystemPrompt = null, options = {}) {
   const args = buildPythonArgs(userIntent, configBSystemPrompt, options);
 
   return new Promise((resolve, reject) => {
@@ -215,6 +231,7 @@ async function runLocalMyBench(userIntent, configBSystemPrompt = null, options =
 }
 
 async function anthropicMessage({ provider, system, userPrompt, maxTokens }) {
+  const finalUserPrompt = `${USER_PROMPT_PREFIX}${userPrompt}`;
   if (provider.name === "openai") {
     const response = await fetch(OPENAI_API_URL, {
       method: "POST",
@@ -227,7 +244,7 @@ async function anthropicMessage({ provider, system, userPrompt, maxTokens }) {
         max_completion_tokens: maxTokens,
         messages: [
           { role: "system", content: system },
-          { role: "user", content: userPrompt },
+          { role: "user", content: finalUserPrompt },
         ],
       }),
     });
@@ -247,6 +264,40 @@ async function anthropicMessage({ provider, system, userPrompt, maxTokens }) {
     return text;
   }
 
+  if (provider.name === "llamacpp") {
+    const response = await fetch(chatCompletionsUrl(LLAMACPP_API_URL), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(LLAMACPP_API_KEY ? { authorization: `Bearer ${LLAMACPP_API_KEY}` } : {}),
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        max_tokens: maxTokens,
+        temperature: 0,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: finalUserPrompt },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`llama.cpp server error ${response.status}: ${errorText}`);
+    }
+
+    const payload = await response.json();
+    const message = payload.choices?.[0]?.message || {};
+    const text = message.content?.trim() || message.reasoning_content?.trim();
+
+    if (!text) {
+      throw new Error("llama.cpp server response did not include text content.");
+    }
+
+    return text;
+  }
+
   const response = await fetch(ANTHROPIC_API_URL, {
     method: "POST",
     headers: {
@@ -258,7 +309,7 @@ async function anthropicMessage({ provider, system, userPrompt, maxTokens }) {
       model: provider.model,
       max_tokens: maxTokens,
       system,
-      messages: [{ role: "user", content: userPrompt }],
+      messages: [{ role: "user", content: finalUserPrompt }],
     }),
   });
 
@@ -418,11 +469,11 @@ ${weaknessAnalysis}`,
   });
 }
 
-export async function runMyBench(userIntent, configBSystemPrompt = null, options = {}) {
+export async function runALIGNHARNESS(userIntent, configBSystemPrompt = null, options = {}) {
   const provider = resolveProvider(options.model);
 
-  if (provider.name === "local") {
-    return runLocalMyBench(userIntent, configBSystemPrompt, {
+  if (provider.name === "local" || provider.name === "llamacpp-python") {
+    return runLocalALIGNHARNESS(userIntent, configBSystemPrompt, {
       ...options,
       model: provider.model,
     });
@@ -491,7 +542,7 @@ export async function runMyBench(userIntent, configBSystemPrompt = null, options
 
 export function formatReport(report) {
   const lines = [
-    "MyBench Results",
+    "ALIGNHARNESS Results",
     "================",
     `Intent: ${report.intent}`,
     `Provider: ${report.provider}`,
@@ -526,7 +577,7 @@ export function formatReport(report) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const report = await runMyBench(args.intent, args.prompt, {
+  const report = await runALIGNHARNESS(args.intent, args.prompt, {
     model: args.model,
     testCases: args.testCases,
   });
@@ -545,7 +596,7 @@ const isMainModule =
 
 if (isMainModule) {
   main().catch((error) => {
-    console.error(`MyBench error: ${error.message}`);
+    console.error(`ALIGNHARNESS error: ${error.message}`);
     process.exit(1);
   });
 }

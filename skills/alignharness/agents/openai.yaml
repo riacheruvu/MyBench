@@ -1,0 +1,8 @@
+interface:
+  display_name: "AlignHarness"
+  short_description: "Benchmark agent behavior against preferences"
+  brand_color: "#2563EB"
+  default_prompt: "Use $alignharness to benchmark whether this assistant setup matches my preferences."
+
+policy:
+  allow_implicit_invocation: true

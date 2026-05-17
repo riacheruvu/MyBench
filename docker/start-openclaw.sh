@@ -11,17 +11,17 @@ const fs = require("node:fs");
 
 const configPath = process.env.CONFIG_PATH;
 const port = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT || "18789", 10);
-const useLocalProvider = (process.env.MYBENCH_PROVIDER || "").trim().toLowerCase() === "local";
+const useLocalProvider = (process.env.ALIGNHARNESS_PROVIDER || "").trim().toLowerCase() === "local";
 
 const sandboxEnv = {
-  ...(process.env.MYBENCH_PROVIDER
-    ? { MYBENCH_PROVIDER: process.env.MYBENCH_PROVIDER }
+  ...(process.env.ALIGNHARNESS_PROVIDER
+    ? { ALIGNHARNESS_PROVIDER: process.env.ALIGNHARNESS_PROVIDER }
     : {}),
-  ...(process.env.MYBENCH_LOCAL_MODEL
-    ? { MYBENCH_LOCAL_MODEL: process.env.MYBENCH_LOCAL_MODEL }
+  ...(process.env.ALIGNHARNESS_LOCAL_MODEL
+    ? { ALIGNHARNESS_LOCAL_MODEL: process.env.ALIGNHARNESS_LOCAL_MODEL }
     : {}),
-  ...(process.env.MYBENCH_LOCAL_FAST
-    ? { MYBENCH_LOCAL_FAST: process.env.MYBENCH_LOCAL_FAST }
+  ...(process.env.ALIGNHARNESS_LOCAL_FAST
+    ? { ALIGNHARNESS_LOCAL_FAST: process.env.ALIGNHARNESS_LOCAL_FAST }
     : {}),
   ...(!useLocalProvider && process.env.OPENAI_API_KEY
     ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY }
@@ -85,7 +85,7 @@ const managed = {
         scope: process.env.OPENCLAW_SANDBOX_SCOPE || "session",
         workspaceAccess: process.env.OPENCLAW_SANDBOX_WORKSPACE_ACCESS || "none",
         docker: {
-          image: process.env.OPENCLAW_SANDBOX_IMAGE || "mybench-openclaw-sandbox:local",
+          image: process.env.OPENCLAW_SANDBOX_IMAGE || "alignharness-openclaw-sandbox:local",
           network: process.env.OPENCLAW_SANDBOX_NETWORK || "bridge",
           readOnlyRoot: false,
           user: "0:0",
@@ -96,7 +96,7 @@ const managed = {
   },
   skills: {
     entries: {
-      mybench: {
+      ALIGNHARNESS: {
         enabled: true,
       },
     },
